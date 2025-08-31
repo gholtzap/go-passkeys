@@ -119,11 +119,11 @@ class PasskeyAuth {
 
     base64UrlToArrayBuffer(base64url) {
         if (!base64url) {
-            console.error('❌ base64UrlToArrayBuffer: input is null or undefined:', base64url);
+            console.error('base64UrlToArrayBuffer: input is null or undefined:', base64url);
             throw new Error('Invalid base64url input');
         }
 
-        console.log('🔄 Converting base64url to ArrayBuffer:', base64url);
+        console.log('Converting base64url to ArrayBuffer:', base64url);
         const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
         const padding = base64.length % 4;
         const padded = base64 + '='.repeat(padding ? 4 - padding : 0);
@@ -138,10 +138,10 @@ class PasskeyAuth {
 
 
     async handleRegister() {
-        console.log('🚀 Starting registration process...');
+        console.log('Starting registration process...');
 
         const username = document.getElementById('register-username').value.trim();
-        console.log('👤 Username:', username);
+        console.log('Username:', username);
 
         if (!username) {
             this.showStatus('Please enter a username', 'error');
@@ -160,7 +160,7 @@ class PasskeyAuth {
             this.showStatus('Starting registration...', 'info');
 
 
-            console.log('📡 Making request to /register/start...');
+            console.log('Making request to /register/start...');
             const startResponse = await fetch(`${this.baseURL}/register/start`, {
                 method: 'POST',
                 headers: {
@@ -169,7 +169,7 @@ class PasskeyAuth {
                 body: JSON.stringify({ username })
             });
 
-            console.log('📬 Response status:', startResponse.status);
+            console.log('Response status:', startResponse.status);
 
             if (!startResponse.ok) {
                 const errorText = await startResponse.text();
@@ -177,14 +177,14 @@ class PasskeyAuth {
             }
 
             const options = await startResponse.json();
-            console.log('✅ Received options from server:', options);
+            console.log('Received options from server:', options);
 
 
             const publicKeyOptions = options.publicKey || options.Response || options;
-            console.log('🔍 PublicKey options:', publicKeyOptions);
-            console.log('🔍 Challenge:', publicKeyOptions.challenge);
-            console.log('🔍 User:', publicKeyOptions.user);
-            console.log('🔍 User ID:', publicKeyOptions.user?.id);
+            console.log('PublicKey options:', publicKeyOptions);
+            console.log('Challenge:', publicKeyOptions.challenge);
+            console.log('User:', publicKeyOptions.user);
+            console.log('User ID:', publicKeyOptions.user?.id);
 
 
             const credentialCreationOptions = {
@@ -247,7 +247,7 @@ class PasskeyAuth {
             const result = await finishResponse.json();
 
             if (result.res) {
-                this.showStatus('✅ Registration successful! Logging you in...', 'success');
+                this.showStatus('Registration successful! Logging you in...', 'success');
                 document.getElementById('register-username').value = '';
 
 
@@ -260,7 +260,7 @@ class PasskeyAuth {
 
         } catch (error) {
             console.error('Registration error:', error);
-            this.showStatus(`❌ Registration failed: ${error.message}`, 'error');
+            this.showStatus(`Registration failed: ${error.message}`, 'error');
         } finally {
 
             registerBtn.disabled = false;
@@ -271,7 +271,7 @@ class PasskeyAuth {
 
 
     async handleLogin() {
-        console.log('🔐 Starting login process...');
+        console.log('Starting login process...');
 
         const username = document.getElementById('login-username').value.trim();
         console.log('👤 Login Username:', username);
@@ -311,11 +311,11 @@ class PasskeyAuth {
             }
 
             const options = await startResponse.json();
-            console.log('✅ Received login options from server:', options);
+            console.log('Received login options from server:', options);
 
 
             const publicKeyOptions = options.publicKey || options.Response || options;
-            console.log('🔍 Login PublicKey options:', publicKeyOptions);
+            console.log('Login PublicKey options:', publicKeyOptions);
 
 
             const credentialRequestOptions = {
@@ -376,7 +376,7 @@ class PasskeyAuth {
             const result = await finishResponse.json();
 
             if (result.res) {
-                this.showStatus(`🎉 Welcome back, ${username}! Login successful.`, 'success');
+                this.showStatus(`Welcome back, ${username}! Login successful.`, 'success');
                 document.getElementById('login-username').value = '';
 
 
@@ -389,7 +389,7 @@ class PasskeyAuth {
 
         } catch (error) {
             console.error('Login error:', error);
-            this.showStatus(`❌ Login failed: ${error.message}`, 'error');
+            this.showStatus(`Login failed: ${error.message}`, 'error');
         } finally {
 
             loginBtn.disabled = false;
