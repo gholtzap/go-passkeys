@@ -1,0 +1,354 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Serif+Text:ital@0;1&family=Shantell+Sans:ital,wght@0,300..800;1,300..800&display=swap');
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'DM Serif Text', serif;
+    background: #f5f5f5;
+    color: #000000;
+    min-height: 100vh;
+    line-height: 1.6;
+}
+
+.container {
+    max-width: 480px;
+    margin: 0 auto;
+    padding: 2rem 1rem;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+header {
+    text-align: center;
+    margin-bottom: 3rem;
+}
+
+header h1 {
+    font-size: 2.5rem;
+    font-weight: 400;
+    margin-bottom: 0.5rem;
+    color: #9792de;
+}
+
+header p {
+    color: #666666;
+    font-size: 1.1rem;
+}
+
+.auth-card {
+    background: #ffffff;
+    border: 1px solid #e0e0e0;
+    border-radius: 1rem;
+    padding: 2rem;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.tabs {
+    display: flex;
+    margin-bottom: 2rem;
+    border-radius: 0.5rem;
+    background: #f0f0f0;
+    padding: 0.25rem;
+}
+
+.tab-btn {
+    flex: 1;
+    padding: 0.75rem 1rem;
+    border: none;
+    background: transparent;
+    color: #666666;
+    border-radius: 0.375rem;
+    cursor: pointer;
+    font-size: 1rem;
+    font-weight: 500;
+    transition: all 0.2s ease;
+}
+
+.tab-btn.active {
+    background: #9792de;
+    color: white;
+    box-shadow: 0 4px 12px rgba(151, 146, 222, 0.3);
+}
+
+.tab-btn:hover:not(.active) {
+    color: #000000;
+    background: rgba(151, 146, 222, 0.1);
+}
+
+.tab-content {
+    display: none;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+.tab-content h2 {
+    font-size: 1.5rem;
+    font-weight: 400;
+    margin-bottom: 1.5rem;
+    color: #000000;
+    text-align: center;
+}
+
+.input-group {
+    margin-bottom: 1.5rem;
+}
+
+label {
+    display: block;
+    margin-bottom: 0.5rem;
+    color: #000000;
+    font-weight: 500;
+}
+
+input[type="text"] {
+    width: 100%;
+    padding: 0.875rem 1rem;
+    background: #ffffff;
+    border: 1px solid #d0d0d0;
+    border-radius: 0.5rem;
+    color: #000000;
+    font-size: 1rem;
+    transition: all 0.2s ease;
+}
+
+input[type="text"]:focus {
+    outline: none;
+    border-color: #9792de;
+    box-shadow: 0 0 0 3px rgba(151, 146, 222, 0.1);
+    background: #ffffff;
+}
+
+input[type="text"]::placeholder {
+    color: #999999;
+}
+
+.auth-btn {
+    width: 100%;
+    padding: 1rem 1.5rem;
+    background: #9792de;
+    border: none;
+    border-radius: 0.5rem;
+    color: white;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    box-shadow: 0 4px 12px rgba(151, 146, 222, 0.3);
+}
+
+.auth-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(151, 146, 222, 0.4);
+}
+
+.auth-btn:active {
+    transform: translateY(0);
+}
+
+.auth-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.btn-icon {
+    font-size: 1.2rem;
+}
+
+.status-message {
+    margin-top: 1.5rem;
+    padding: 0.875rem 1rem;
+    border-radius: 0.5rem;
+    text-align: center;
+    font-weight: 500;
+    display: none;
+}
+
+.status-message.success {
+    background: rgba(34, 197, 94, 0.1);
+    border: 1px solid rgba(34, 197, 94, 0.3);
+    color: #16a34a;
+    display: block;
+}
+
+.status-message.error {
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: #dc2626;
+    display: block;
+}
+
+.status-message.info {
+    background: rgba(151, 146, 222, 0.1);
+    border: 1px solid rgba(151, 146, 222, 0.3);
+    color: #9792de;
+    display: block;
+}
+
+footer {
+    text-align: center;
+    margin-top: 3rem;
+    color: #666666;
+    font-size: 0.875rem;
+}
+
+.loading {
+    position: relative;
+    overflow: hidden;
+}
+
+.loading::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(151, 146, 222, 0.1), transparent);
+    animation: loading 1.5s infinite;
+}
+
+@keyframes loading {
+    0% {
+        left: -100%;
+    }
+
+    100% {
+        left: 100%;
+    }
+}
+
+@media (max-width: 480px) {
+    .container {
+        padding: 1rem;
+    }
+
+    .auth-card {
+        padding: 1.5rem;
+    }
+
+    header h1 {
+        font-size: 2rem;
+    }
+}
+
+.user-info {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+    padding: 1.5rem;
+    background: #ffffff;
+    border-radius: 0.75rem;
+    border: 1px solid #e0e0e0;
+}
+
+.user-avatar {
+    font-size: 3rem;
+    width: 80px;
+    height: 80px;
+    background: #9792de;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 8px 20px rgba(151, 146, 222, 0.3);
+}
+
+.user-details h2 {
+    margin: 0 0 0.5rem 0;
+    color: #000000;
+    font-size: 1.75rem;
+    font-weight: 400;
+}
+
+.username-display {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #9792de;
+    margin: 0 0 0.25rem 0;
+}
+
+.login-time {
+    font-size: 0.875rem;
+    color: #666666;
+    margin: 0;
+}
+
+.logout-btn {
+    width: 100%;
+    padding: 1rem 1.5rem;
+    background: #ef4444;
+    border: none;
+    border-radius: 0.5rem;
+    color: white;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+}
+
+.logout-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(239, 68, 68, 0.4);
+    background: #dc2626;
+}
+
+.logout-btn:active {
+    transform: translateY(0);
+}
+
+.logout-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.auth-card {
+    animation: fadeIn 0.6s ease-out;
+}
+
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateX(-20px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+.user-info {
+    animation: slideIn 0.8s ease-out;
+}

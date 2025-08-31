@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Passkeys Authentication</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>Passkeys Demo</h1>
+        </header>
+
+        <main>
+
+            <div id="user-dashboard" class="auth-card" style="display: none;">
+                <div class="user-info">
+                    <div class="user-details">
+                        <h2>Welcome back!</h2>
+                        <p class="username-display"></p>
+                        <p class="login-time"></p>
+                    </div>
+                </div>
+                <button id="logout-btn" class="logout-btn">
+                    <span class="btn-text">Logout</span>
+                </button>
+            </div>
+
+
+            <div id="auth-forms" class="auth-card">
+                <div class="tabs">
+                    <button class="tab-btn active" onclick="switchTab('register')">Register</button>
+                    <button class="tab-btn" onclick="switchTab('login')">Login</button>
+                </div>
+
+                <div id="register-tab" class="tab-content active">
+                    <h2>Create Account</h2>
+                    <form id="register-form">
+                        <div class="input-group">
+                            <label for="register-username">Username</label>
+                            <input type="text" id="register-username" placeholder="Enter your username" required>
+                        </div>
+                        <button type="submit" class="auth-btn">
+                            <span class="btn-text">Register</span>
+                        </button>
+                    </form>
+                </div>
+
+                <div id="login-tab" class="tab-content">
+                    <h2>Sign In</h2>
+                    <form id="login-form">
+                        <div class="input-group">
+                            <label for="login-username">Username</label>
+                            <input type="text" id="login-username" placeholder="Enter your username" required>
+                        </div>
+                        <button type="submit" class="auth-btn">
+                            <span class="btn-text">Login</span>
+                        </button>
+                    </form>
+                </div>
+
+                <div id="status" class="status-message"></div>
+            </div>
+        </main>
+
+        <footer>
+            <p>Made by Gavin </p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
