@@ -323,7 +323,6 @@ class PasskeyAuth {
                 challenge: this.base64UrlToArrayBuffer(publicKeyOptions.challenge)
             };
 
-            // Convert allowCredentials if present
             if (publicKeyOptions.allowCredentials) {
                 credentialRequestOptions.allowCredentials = publicKeyOptions.allowCredentials.map(cred => ({
                     ...cred,

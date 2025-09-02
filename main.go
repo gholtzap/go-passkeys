@@ -53,10 +53,54 @@ type Server struct {
 }
 
 func NewServer() (*Server, error) {
+	return &Server{
+		webAuthn:   nil,
+		users:      make(map[string]*User),
+		sessions:   make(map[string]*webauthn.SessionData),
+		challenges: make(map[string]string),
+	}, nil
+}
+
+func (s *Server) getWebAuthnForRequest(r *http.Request) (*webauthn.WebAuthn, error) {
+	if s.webAuthn != nil {
+		return s.webAuthn, nil
+	}
+
+	host := r.Host
+
+	if forwardedHost := r.Header.Get("X-Forwarded-Host"); forwardedHost != "" {
+		host = forwardedHost
+	}
+
+	rpid := os.Getenv("WEBAUTHN_RPID")
+	if rpid == "" {
+		if strings.Contains(host, ":") {
+			rpid = strings.Split(host, ":")[0]
+		} else {
+			rpid = host
+		}
+	}
+
+	scheme := "http"
+	if r.TLS != nil ||
+		r.Header.Get("X-Forwarded-Proto") == "https" ||
+		r.Header.Get("X-Forwarded-Ssl") == "on" ||
+		r.Header.Get("X-Forwarded-Scheme") == "https" {
+		scheme = "https"
+	}
+
+	origin := os.Getenv("WEBAUTHN_ORIGIN")
+	if origin == "" {
+		origin = fmt.Sprintf("%s://%s", scheme, host)
+	}
+
+	log.Printf("WebAuthn Config - RPID: %s, Origin: %s, Host: %s, Proto: %s",
+		rpid, origin, r.Host, r.Header.Get("X-Forwarded-Proto"))
+
 	wconfig := &webauthn.Config{
-		RPDisplayName: "webauthn-app",                                            
-		RPID:          "localhost",                                               
-		RPOrigins:     []string{"http://localhost:3000", "http://127.0.0.1:3000"}, 
+		RPDisplayName: "webauthn-app",
+		RPID:          rpid,
+		RPOrigins:     []string{origin},
 	}
 
 	webAuthn, err := webauthn.New(wconfig)
@@ -64,12 +108,8 @@ func NewServer() (*Server, error) {
 		return nil, fmt.Errorf("failed to create WebAuthn instance: %w", err)
 	}
 
-	return &Server{
-		webAuthn:   webAuthn,
-		users:      make(map[string]*User),
-		sessions:   make(map[string]*webauthn.SessionData),
-		challenges: make(map[string]string),
-	}, nil
+	s.webAuthn = webAuthn
+	return webAuthn, nil
 }
 
 func (s *Server) RegisterStartHandler(w http.ResponseWriter, r *http.Request) {
@@ -85,6 +125,13 @@ func (s *Server) RegisterStartHandler(w http.ResponseWriter, r *http.Request) {
 	username := req.Username
 	if username == "" {
 		http.Error(w, "Username is required", http.StatusBadRequest)
+		return
+	}
+
+	webAuthn, err := s.getWebAuthnForRequest(r)
+	if err != nil {
+		log.Printf("Failed to get WebAuthn instance: %v", err)
+		http.Error(w, "WebAuthn configuration error", http.StatusInternalServerError)
 		return
 	}
 
@@ -116,7 +163,7 @@ func (s *Server) RegisterStartHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	options, sessionData, err := s.webAuthn.BeginRegistration(user, registerOptions)
+	options, sessionData, err := webAuthn.BeginRegistration(user, registerOptions)
 	if err != nil {
 		log.Printf("Failed to begin registration: %v", err)
 		http.Error(w, "Failed to begin registration", http.StatusInternalServerError)
@@ -185,7 +232,14 @@ func (s *Server) RegisterFinishHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	credentialRequest.Header.Set("Content-Type", "application/json")
 
-	credential, err := s.webAuthn.FinishRegistration(user, *sessionData, credentialRequest)
+	webAuthn, err := s.getWebAuthnForRequest(r)
+	if err != nil {
+		log.Printf("Failed to get WebAuthn instance: %v", err)
+		http.Error(w, "WebAuthn configuration error", http.StatusInternalServerError)
+		return
+	}
+
+	credential, err := webAuthn.FinishRegistration(user, *sessionData, credentialRequest)
 	if err != nil {
 		log.Printf("Failed to finish registration: %v", err)
 		http.Error(w, fmt.Sprintf("Failed to finish registration: %v", err), http.StatusBadRequest)
@@ -230,11 +284,18 @@ func (s *Server) LoginStartHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	webAuthn, err := s.getWebAuthnForRequest(r)
+	if err != nil {
+		log.Printf("Failed to get WebAuthn instance: %v", err)
+		http.Error(w, "WebAuthn configuration error", http.StatusInternalServerError)
+		return
+	}
+
 	loginOptions := func(credRequestOpts *protocol.PublicKeyCredentialRequestOptions) {
 		credRequestOpts.UserVerification = protocol.VerificationPreferred
 	}
 
-	options, sessionData, err := s.webAuthn.BeginLogin(user, loginOptions)
+	options, sessionData, err := webAuthn.BeginLogin(user, loginOptions)
 	if err != nil {
 		log.Printf("Failed to begin login: %v", err)
 		http.Error(w, "Failed to begin login", http.StatusInternalServerError)
@@ -303,7 +364,14 @@ func (s *Server) LoginFinishHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	credentialRequest.Header.Set("Content-Type", "application/json")
 
-	_, err = s.webAuthn.FinishLogin(user, *sessionData, credentialRequest)
+	webAuthn, err := s.getWebAuthnForRequest(r)
+	if err != nil {
+		log.Printf("Failed to get WebAuthn instance: %v", err)
+		http.Error(w, "WebAuthn configuration error", http.StatusInternalServerError)
+		return
+	}
+
+	_, err = webAuthn.FinishLogin(user, *sessionData, credentialRequest)
 	if err != nil {
 		log.Printf("Failed to finish login: %v", err)
 		http.Error(w, fmt.Sprintf("Failed to finish login: %v", err), http.StatusBadRequest)
@@ -330,6 +398,23 @@ func generateChallenge() (string, error) {
 }
 
 func main() {
+	// Set Railway-specific environment variables if not already set
+	if os.Getenv("WEBAUTHN_RPID") == "" && os.Getenv("RAILWAY_ENVIRONMENT") != "" {
+		if railwayDomain := os.Getenv("RAILWAY_PUBLIC_DOMAIN"); railwayDomain != "" {
+			os.Setenv("WEBAUTHN_RPID", railwayDomain)
+			os.Setenv("WEBAUTHN_ORIGIN", "https://"+railwayDomain)
+			log.Printf("Set Railway config - RPID: %s, Origin: %s", railwayDomain, "https://"+railwayDomain)
+		}
+	}
+
+	if os.Getenv("WEBAUTHN_RPID") == "" {
+		if port := os.Getenv("PORT"); port != "" {
+			os.Setenv("WEBAUTHN_RPID", "go-passkeys-production.up.railway.app")
+			os.Setenv("WEBAUTHN_ORIGIN", "https://go-passkeys-production.up.railway.app")
+			log.Printf("Set fallback Railway config for go-passkeys-production.up.railway.app")
+		}
+	}
+
 	server, err := NewServer()
 	if err != nil {
 		log.Fatal("Failed to create server:", err)
