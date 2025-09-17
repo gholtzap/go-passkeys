@@ -1,6 +1,10 @@
 class PasskeyAuth {
     constructor() {
         this.baseURL = window.location.origin;
+        this.accessToken = null;
+        this.refreshTimer = null;
+        this.username = null;
+        this.isRefreshing = false;
         this.init();
     }
 
@@ -25,44 +29,226 @@ class PasskeyAuth {
         document.getElementById('logout-btn').addEventListener('click', () => {
             this.handleLogout();
         });
+
+        document.getElementById('test-protected-btn').addEventListener('click', () => {
+            this.testProtectedAccess();
+        });
     }
 
-    checkLoginState() {
-        const loginData = localStorage.getItem('passkey_login');
-        if (loginData) {
-            try {
-                const { username, loginTime } = JSON.parse(loginData);
-                const now = new Date().getTime();
-                const loginTimestamp = new Date(loginTime).getTime();
-                const hoursSinceLogin = (now - loginTimestamp) / (1000 * 60 * 60);
-
-                if (hoursSinceLogin < 24) {
-                    this.showUserDashboard(username, loginTime);
-                } else {
-                    localStorage.removeItem('passkey_login');
-                    this.showAuthForms();
-                }
-            } catch (e) {
-                localStorage.removeItem('passkey_login');
-                this.showAuthForms();
-            }
-        } else {
-            this.showAuthForms();
+    parseJWT(token) {
+        try {
+            const base64Url = token.split('.')[1];
+            const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+            const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
+                return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+            }).join(''));
+            return JSON.parse(jsonPayload);
+        } catch (e) {
+            return null;
         }
     }
 
-    setLoginState(username) {
-        const loginData = {
-            username: username,
-            loginTime: new Date().toISOString()
-        };
-        localStorage.setItem('passkey_login', JSON.stringify(loginData));
-        this.showUserDashboard(username, loginData.loginTime);
+    isTokenExpired(token) {
+        const payload = this.parseJWT(token);
+        if (!payload || !payload.exp) return true;
+        return Date.now() >= payload.exp * 1000;
+    }
+
+    getTokenTimeLeft(token) {
+        const payload = this.parseJWT(token);
+        if (!payload || !payload.exp) return 0;
+        return Math.max(0, payload.exp * 1000 - Date.now());
+    }
+
+    scheduleTokenRefresh() {
+        if (this.refreshTimer) {
+            clearTimeout(this.refreshTimer);
+        }
+
+        if (!this.accessToken || !this.username) {
+            return;
+        }
+
+        const timeLeft = this.getTokenTimeLeft(this.accessToken);
+        const refreshTime = Math.max(0, timeLeft - 5000);
+
+        this.refreshTimer = setTimeout(() => {
+            this.refreshToken();
+        }, refreshTime);
+    }
+
+    async refreshToken() {
+        if (this.isRefreshing || !this.username) {
+            return;
+        }
+
+        this.isRefreshing = true;
+
+        try {
+            const startResponse = await fetch(`${this.baseURL}/refresh/start`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ username: this.username })
+            });
+
+            if (!startResponse.ok) {
+                throw new Error('Failed to start token refresh');
+            }
+
+            const options = await startResponse.json();
+            const publicKeyOptions = options.publicKey || options.Response || options;
+
+            const credentialRequestOptions = {
+                ...publicKeyOptions,
+                challenge: this.base64UrlToArrayBuffer(publicKeyOptions.challenge)
+            };
+
+            if (publicKeyOptions.allowCredentials) {
+                credentialRequestOptions.allowCredentials = publicKeyOptions.allowCredentials.map(cred => ({
+                    ...cred,
+                    id: this.base64UrlToArrayBuffer(cred.id)
+                }));
+            }
+
+            const assertion = await navigator.credentials.get({
+                publicKey: credentialRequestOptions
+            });
+
+            if (!assertion) {
+                throw new Error('Failed to get assertion for token refresh');
+            }
+
+            const assertionData = {
+                id: assertion.id,
+                rawId: this.arrayBufferToBase64Url(assertion.rawId),
+                type: assertion.type,
+                response: {
+                    authenticatorData: this.arrayBufferToBase64Url(assertion.response.authenticatorData),
+                    clientDataJSON: this.arrayBufferToBase64Url(assertion.response.clientDataJSON),
+                    signature: this.arrayBufferToBase64Url(assertion.response.signature),
+                    userHandle: assertion.response.userHandle ? this.arrayBufferToBase64Url(assertion.response.userHandle) : null
+                }
+            };
+
+            const finishResponse = await fetch(`${this.baseURL}/refresh/finish`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    username: this.username,
+                    data: assertionData
+                })
+            });
+
+            if (!finishResponse.ok) {
+                throw new Error('Failed to complete token refresh');
+            }
+
+            const result = await finishResponse.json();
+            this.accessToken = result.access_token;
+            this.updateStoredToken();
+            this.scheduleTokenRefresh();
+
+        } catch (error) {
+            console.error('Token refresh failed:', error);
+            this.clearLoginState();
+            this.showStatus('Session expired. Please log in again.', 'error');
+        } finally {
+            this.isRefreshing = false;
+        }
+    }
+
+    updateStoredToken() {
+        if (this.accessToken && this.username) {
+            const tokenData = {
+                username: this.username,
+                accessToken: this.accessToken,
+                loginTime: new Date().toISOString()
+            };
+            localStorage.setItem('passkey_token', JSON.stringify(tokenData));
+        }
+    }
+
+    checkLoginState() {
+        localStorage.removeItem('passkey_login');
+        
+        const tokenData = localStorage.getItem('passkey_token');
+        if (tokenData) {
+            try {
+                const { username, accessToken, loginTime } = JSON.parse(tokenData);
+                
+                if (!this.isTokenExpired(accessToken)) {
+                    this.accessToken = accessToken;
+                    this.username = username;
+                    this.showUserDashboard(username, loginTime);
+                    this.scheduleTokenRefresh();
+                    return;
+                }
+                
+                localStorage.removeItem('passkey_token');
+            } catch (e) {
+                localStorage.removeItem('passkey_token');
+            }
+        }
+        
+        this.showAuthForms();
+    }
+
+    setLoginState(username, accessToken) {
+        this.username = username;
+        this.accessToken = accessToken;
+        this.updateStoredToken();
+        this.showUserDashboard(username, new Date().toISOString());
+        this.scheduleTokenRefresh();
     }
 
     clearLoginState() {
         localStorage.removeItem('passkey_login');
+        localStorage.removeItem('passkey_token');
+        this.accessToken = null;
+        this.username = null;
+        if (this.refreshTimer) {
+            clearTimeout(this.refreshTimer);
+            this.refreshTimer = null;
+        }
         this.showAuthForms();
+    }
+
+    async testProtectedAccess() {
+        if (!this.accessToken) {
+            this.showStatus('No access token available', 'error');
+            return;
+        }
+
+        if (this.isTokenExpired(this.accessToken)) {
+            this.showStatus('Token expired, please wait for refresh...', 'error');
+            return;
+        }
+
+        try {
+            const response = await fetch(`${this.baseURL}/protected`, {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${this.accessToken}`,
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            if (response.ok) {
+                const result = await response.json();
+                this.showStatus(`✅ Protected access successful! Welcome ${result.user}`, 'success');
+            } else if (response.status === 401) {
+                this.showStatus('❌ Access denied: Invalid or expired token', 'error');
+            } else {
+                this.showStatus('❌ Failed to access protected resource', 'error');
+            }
+        } catch (error) {
+            console.error('Protected access test failed:', error);
+            this.showStatus('❌ Network error accessing protected resource', 'error');
+        }
     }
 
     showUserDashboard(username, loginTime) {
@@ -246,13 +432,13 @@ class PasskeyAuth {
 
             const result = await finishResponse.json();
 
-            if (result.res) {
+            if (result.access_token) {
                 this.showStatus('Registration successful! Logging you in...', 'success');
                 document.getElementById('register-username').value = '';
 
 
                 setTimeout(() => {
-                    this.setLoginState(username);
+                    this.setLoginState(username, result.access_token);
                 }, 1500);
             } else {
                 throw new Error('Registration failed');
@@ -374,13 +560,13 @@ class PasskeyAuth {
 
             const result = await finishResponse.json();
 
-            if (result.res) {
+            if (result.access_token) {
                 this.showStatus(`Welcome back, ${username}! Login successful.`, 'success');
                 document.getElementById('login-username').value = '';
 
 
                 setTimeout(() => {
-                    this.setLoginState(username);
+                    this.setLoginState(username, result.access_token);
                 }, 1000);
             } else {
                 throw new Error('Authentication failed');
