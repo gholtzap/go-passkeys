@@ -2,9 +2,9 @@ class PasskeyAuth {
     constructor() {
         this.baseURL = window.location.origin;
         this.accessToken = null;
-        this.refreshTimer = null;
         this.username = null;
         this.isRefreshing = false;
+        this.pendingRequests = [];
         this.init();
     }
 
@@ -60,161 +60,94 @@ class PasskeyAuth {
         return Math.max(0, payload.exp * 1000 - Date.now());
     }
 
-    scheduleTokenRefresh() {
-        if (this.refreshTimer) {
-            clearTimeout(this.refreshTimer);
-        }
-
-        if (!this.accessToken || !this.username) {
-            return;
-        }
-
-        const timeLeft = this.getTokenTimeLeft(this.accessToken);
-        const refreshTime = Math.max(0, timeLeft - 5000);
-
-        this.refreshTimer = setTimeout(() => {
-            this.refreshToken();
-        }, refreshTime);
-    }
-
     async refreshToken() {
-        if (this.isRefreshing || !this.username) {
-            return;
+        if (this.isRefreshing) {
+            return new Promise((resolve, reject) => {
+                this.pendingRequests.push({ resolve, reject });
+            });
         }
 
         this.isRefreshing = true;
 
         try {
-            const startResponse = await fetch(`${this.baseURL}/refresh/start`, {
+            const response = await fetch(`${this.baseURL}/refresh`, {
                 method: 'POST',
+                credentials: 'include',
                 headers: {
                     'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ username: this.username })
-            });
-
-            if (!startResponse.ok) {
-                throw new Error('Failed to start token refresh');
-            }
-
-            const options = await startResponse.json();
-            const publicKeyOptions = options.publicKey || options.Response || options;
-
-            const credentialRequestOptions = {
-                ...publicKeyOptions,
-                challenge: this.base64UrlToArrayBuffer(publicKeyOptions.challenge)
-            };
-
-            if (publicKeyOptions.allowCredentials) {
-                credentialRequestOptions.allowCredentials = publicKeyOptions.allowCredentials.map(cred => ({
-                    ...cred,
-                    id: this.base64UrlToArrayBuffer(cred.id)
-                }));
-            }
-
-            const assertion = await navigator.credentials.get({
-                publicKey: credentialRequestOptions
-            });
-
-            if (!assertion) {
-                throw new Error('Failed to get assertion for token refresh');
-            }
-
-            const assertionData = {
-                id: assertion.id,
-                rawId: this.arrayBufferToBase64Url(assertion.rawId),
-                type: assertion.type,
-                response: {
-                    authenticatorData: this.arrayBufferToBase64Url(assertion.response.authenticatorData),
-                    clientDataJSON: this.arrayBufferToBase64Url(assertion.response.clientDataJSON),
-                    signature: this.arrayBufferToBase64Url(assertion.response.signature),
-                    userHandle: assertion.response.userHandle ? this.arrayBufferToBase64Url(assertion.response.userHandle) : null
                 }
-            };
-
-            const finishResponse = await fetch(`${this.baseURL}/refresh/finish`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    username: this.username,
-                    data: assertionData
-                })
             });
 
-            if (!finishResponse.ok) {
-                throw new Error('Failed to complete token refresh');
+            if (!response.ok) {
+                throw new Error('Failed to refresh token');
             }
 
-            const result = await finishResponse.json();
+            const result = await response.json();
             this.accessToken = result.access_token;
-            this.updateStoredToken();
-            this.scheduleTokenRefresh();
 
+            this.pendingRequests.forEach(({ resolve }) => resolve(this.accessToken));
+            this.pendingRequests = [];
+
+            return this.accessToken;
         } catch (error) {
             console.error('Token refresh failed:', error);
             this.clearLoginState();
             this.showStatus('Session expired. Please log in again.', 'error');
+
+            this.pendingRequests.forEach(({ reject }) => reject(error));
+            this.pendingRequests = [];
+
+            throw error;
         } finally {
             this.isRefreshing = false;
         }
     }
 
-    updateStoredToken() {
-        if (this.accessToken && this.username) {
-            const tokenData = {
-                username: this.username,
-                accessToken: this.accessToken,
-                loginTime: new Date().toISOString()
-            };
-            localStorage.setItem('passkey_token', JSON.stringify(tokenData));
-        }
-    }
-
     checkLoginState() {
-        localStorage.removeItem('passkey_login');
-        
-        const tokenData = localStorage.getItem('passkey_token');
-        if (tokenData) {
-            try {
-                const { username, accessToken, loginTime } = JSON.parse(tokenData);
-                
-                if (!this.isTokenExpired(accessToken)) {
-                    this.accessToken = accessToken;
-                    this.username = username;
-                    this.showUserDashboard(username, loginTime);
-                    this.scheduleTokenRefresh();
-                    return;
-                }
-                
-                localStorage.removeItem('passkey_token');
-            } catch (e) {
-                localStorage.removeItem('passkey_token');
-            }
-        }
-        
         this.showAuthForms();
     }
 
     setLoginState(username, accessToken) {
         this.username = username;
         this.accessToken = accessToken;
-        this.updateStoredToken();
         this.showUserDashboard(username, new Date().toISOString());
-        this.scheduleTokenRefresh();
     }
 
     clearLoginState() {
-        localStorage.removeItem('passkey_login');
-        localStorage.removeItem('passkey_token');
         this.accessToken = null;
         this.username = null;
-        if (this.refreshTimer) {
-            clearTimeout(this.refreshTimer);
-            this.refreshTimer = null;
-        }
         this.showAuthForms();
+    }
+
+    async apiCall(url, options = {}) {
+        if (!this.accessToken) {
+            throw new Error('No access token available');
+        }
+
+        const requestOptions = {
+            ...options,
+            credentials: 'include',
+            headers: {
+                'Authorization': `Bearer ${this.accessToken}`,
+                'Content-Type': 'application/json',
+                ...options.headers
+            }
+        };
+
+        let response = await fetch(url, requestOptions);
+
+        if (response.status === 401) {
+            try {
+                await this.refreshToken();
+                
+                requestOptions.headers['Authorization'] = `Bearer ${this.accessToken}`;
+                response = await fetch(url, requestOptions);
+            } catch (refreshError) {
+                throw new Error('Authentication failed');
+            }
+        }
+
+        return response;
     }
 
     async testProtectedAccess() {
@@ -223,31 +156,20 @@ class PasskeyAuth {
             return;
         }
 
-        if (this.isTokenExpired(this.accessToken)) {
-            this.showStatus('Token expired, please wait for refresh...', 'error');
-            return;
-        }
-
         try {
-            const response = await fetch(`${this.baseURL}/protected`, {
-                method: 'GET',
-                headers: {
-                    'Authorization': `Bearer ${this.accessToken}`,
-                    'Content-Type': 'application/json'
-                }
+            const response = await this.apiCall(`${this.baseURL}/protected`, {
+                method: 'GET'
             });
 
             if (response.ok) {
                 const result = await response.json();
                 this.showStatus(`✅ Protected access successful! Welcome ${result.user}`, 'success');
-            } else if (response.status === 401) {
-                this.showStatus('❌ Access denied: Invalid or expired token', 'error');
             } else {
                 this.showStatus('❌ Failed to access protected resource', 'error');
             }
         } catch (error) {
             console.error('Protected access test failed:', error);
-            this.showStatus('❌ Network error accessing protected resource', 'error');
+            this.showStatus(`❌ ${error.message}`, 'error');
         }
     }
 
@@ -270,7 +192,19 @@ class PasskeyAuth {
         statusEl.style.display = 'none';
     }
 
-    handleLogout() {
+    async handleLogout() {
+        try {
+            await fetch(`${this.baseURL}/logout`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+        } catch (error) {
+            console.error('Logout request failed:', error);
+        }
+
         this.clearLoginState();
         this.showStatus('👋 Logged out successfully', 'success');
 
@@ -349,6 +283,7 @@ class PasskeyAuth {
             console.log('Making request to /register/start...');
             const startResponse = await fetch(`${this.baseURL}/register/start`, {
                 method: 'POST',
+                credentials: 'include',
                 headers: {
                     'Content-Type': 'application/json',
                 },
@@ -416,6 +351,7 @@ class PasskeyAuth {
 
             const finishResponse = await fetch(`${this.baseURL}/register/finish`, {
                 method: 'POST',
+                credentials: 'include',
                 headers: {
                     'Content-Type': 'application/json',
                 },
@@ -481,6 +417,7 @@ class PasskeyAuth {
 
             const startResponse = await fetch(`${this.baseURL}/login/start`, {
                 method: 'POST',
+                credentials: 'include',
                 headers: {
                     'Content-Type': 'application/json',
                 },
@@ -544,6 +481,7 @@ class PasskeyAuth {
 
             const finishResponse = await fetch(`${this.baseURL}/login/finish`, {
                 method: 'POST',
+                credentials: 'include',
                 headers: {
                     'Content-Type': 'application/json',
                 },

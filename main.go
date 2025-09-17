@@ -46,14 +46,22 @@ func (u User) WebAuthnIcon() string {
 	return ""
 }
 
+type RefreshToken struct {
+	Token     string
+	Username  string
+	ExpiresAt time.Time
+	CreatedAt time.Time
+}
+
 type Server struct {
-	webAuthn        *webauthn.WebAuthn
-	users           map[string]*User
-	sessions        map[string]*webauthn.SessionData
-	challenges      map[string]string
-	refreshSessions map[string]*webauthn.SessionData
-	jwtSecret       []byte
-	mu              sync.RWMutex
+	webAuthn      *webauthn.WebAuthn
+	users         map[string]*User
+	sessions      map[string]*webauthn.SessionData
+	challenges    map[string]string
+	refreshTokens map[string]*RefreshToken
+	jwtSecret     []byte
+	refreshSecret []byte
+	mu            sync.RWMutex
 }
 
 type TokenResponse struct {
@@ -66,6 +74,12 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
+type RefreshClaims struct {
+	Username  string `json:"username"`
+	TokenType string `json:"token_type"`
+	jwt.RegisteredClaims
+}
+
 func NewServer() (*Server, error) {
 	jwtSecret := make([]byte, 32)
 	_, err := rand.Read(jwtSecret)
@@ -73,13 +87,20 @@ func NewServer() (*Server, error) {
 		return nil, fmt.Errorf("failed to generate JWT secret: %w", err)
 	}
 
+	refreshSecret := make([]byte, 32)
+	_, err = rand.Read(refreshSecret)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate refresh secret: %w", err)
+	}
+
 	return &Server{
-		webAuthn:        nil,
-		users:           make(map[string]*User),
-		sessions:        make(map[string]*webauthn.SessionData),
-		challenges:      make(map[string]string),
-		refreshSessions: make(map[string]*webauthn.SessionData),
-		jwtSecret:       jwtSecret,
+		webAuthn:      nil,
+		users:         make(map[string]*User),
+		sessions:      make(map[string]*webauthn.SessionData),
+		challenges:    make(map[string]string),
+		refreshTokens: make(map[string]*RefreshToken),
+		jwtSecret:     jwtSecret,
+		refreshSecret: refreshSecret,
 	}, nil
 }
 
@@ -168,6 +189,56 @@ func (s *Server) validateJWT(tokenString string) (*Claims, error) {
 	}
 
 	return claims, nil
+}
+
+func (s *Server) generateRefreshToken(username string) (string, error) {
+	tokenBytes := make([]byte, 32)
+	_, err := rand.Read(tokenBytes)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate refresh token: %w", err)
+	}
+
+	tokenString := base64.URLEncoding.EncodeToString(tokenBytes)
+
+	refreshToken := &RefreshToken{
+		Token:     tokenString,
+		Username:  username,
+		ExpiresAt: time.Now().Add(100 * time.Second),
+		CreatedAt: time.Now(),
+	}
+
+	s.mu.Lock()
+	s.refreshTokens[tokenString] = refreshToken
+	s.mu.Unlock()
+
+	log.Printf("Generated new refresh token for %s, expires at %v", username, refreshToken.ExpiresAt.Format("15:04:05"))
+
+	return tokenString, nil
+}
+
+func (s *Server) validateRefreshToken(tokenString string) (*RefreshToken, error) {
+	s.mu.RLock()
+	refreshToken, exists := s.refreshTokens[tokenString]
+	s.mu.RUnlock()
+
+	if !exists {
+		return nil, fmt.Errorf("refresh token not found")
+	}
+
+	if time.Now().After(refreshToken.ExpiresAt) {
+		s.mu.Lock()
+		delete(s.refreshTokens, tokenString)
+		s.mu.Unlock()
+		return nil, fmt.Errorf("refresh token expired")
+	}
+
+	return refreshToken, nil
+}
+
+func (s *Server) revokeRefreshToken(tokenString string) {
+	s.mu.Lock()
+	delete(s.refreshTokens, tokenString)
+	s.mu.Unlock()
 }
 
 func (s *Server) jwtMiddleware(next http.HandlerFunc) http.HandlerFunc {
@@ -346,6 +417,23 @@ func (s *Server) RegisterFinishHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	refreshToken, err := s.generateRefreshToken(username)
+	if err != nil {
+		log.Printf("Failed to generate refresh token: %v", err)
+		http.Error(w, "Failed to generate refresh token", http.StatusInternalServerError)
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    refreshToken,
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+		Path:     "/",
+		MaxAge:   100,
+	})
+
 	response := TokenResponse{
 		AccessToken: accessToken,
 		ExpiresIn:   30,
@@ -486,6 +574,23 @@ func (s *Server) LoginFinishHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	refreshToken, err := s.generateRefreshToken(username)
+	if err != nil {
+		log.Printf("Failed to generate refresh token: %v", err)
+		http.Error(w, "Failed to generate refresh token", http.StatusInternalServerError)
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    refreshToken,
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+		Path:     "/",
+		MaxAge:   100,
+	})
+
 	response := TokenResponse{
 		AccessToken: accessToken,
 		ExpiresIn:   30,
@@ -494,138 +599,35 @@ func (s *Server) LoginFinishHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-func (s *Server) RefreshStartHandler(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Username string `json:"username"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	username := req.Username
-	if username == "" {
-		http.Error(w, "Username is required", http.StatusBadRequest)
-		return
-	}
-
-	s.mu.RLock()
-	user, exists := s.users[username]
-	s.mu.RUnlock()
-
-	if !exists {
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(false)
-		return
-	}
-
-	webAuthn, err := s.getWebAuthnForRequest(r)
+func (s *Server) RefreshHandler(w http.ResponseWriter, r *http.Request) {
+	refreshCookie, err := r.Cookie("refresh_token")
 	if err != nil {
-		log.Printf("Failed to get WebAuthn instance: %v", err)
-		http.Error(w, "WebAuthn configuration error", http.StatusInternalServerError)
+		log.Printf("Refresh token not found in cookie")
+		http.Error(w, "Refresh token not found", http.StatusUnauthorized)
 		return
 	}
 
-	refreshOptions := func(credRequestOpts *protocol.PublicKeyCredentialRequestOptions) {
-		credRequestOpts.UserVerification = protocol.VerificationDiscouraged
-	}
-
-	options, sessionData, err := webAuthn.BeginLogin(user, refreshOptions)
+	refreshToken, err := s.validateRefreshToken(refreshCookie.Value)
 	if err != nil {
-		log.Printf("Failed to begin token refresh: %v", err)
-		http.Error(w, "Failed to begin token refresh", http.StatusInternalServerError)
+		log.Printf("Refresh token validation failed: %v", err)
+		http.Error(w, "Invalid or expired refresh token", http.StatusUnauthorized)
 		return
 	}
 
-	s.mu.Lock()
-	s.refreshSessions[username] = sessionData
-	s.mu.Unlock()
+	timeLeft := time.Until(refreshToken.ExpiresAt)
+	log.Printf("Refresh token still valid for %v seconds", timeLeft.Seconds())
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(options)
-}
-
-func (s *Server) RefreshFinishHandler(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Username string                                `json:"username"`
-		Data     *protocol.CredentialAssertionResponse `json:"data"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	username := req.Username
-	if username == "" {
-		http.Error(w, "Username is required", http.StatusBadRequest)
-		return
-	}
-
-	s.mu.RLock()
-	user, userExists := s.users[username]
-	sessionData, sessionExists := s.refreshSessions[username]
-	s.mu.RUnlock()
-
-	if !userExists {
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(false)
-		return
-	}
-
-	if !sessionExists {
-		http.Error(w, "No active refresh session", http.StatusBadRequest)
-		return
-	}
-
-	if req.Data == nil {
-		http.Error(w, "Missing credential data", http.StatusBadRequest)
-		return
-	}
-
-	credentialJSON, err := json.Marshal(req.Data)
+	newAccessToken, err := s.generateJWT(refreshToken.Username)
 	if err != nil {
-		log.Printf("Failed to marshal credential data: %v", err)
-		http.Error(w, "Failed to process credential data", http.StatusBadRequest)
-		return
-	}
-
-	credentialRequest, err := http.NewRequest("POST", "", strings.NewReader(string(credentialJSON)))
-	if err != nil {
-		log.Printf("Failed to create credential request: %v", err)
-		http.Error(w, "Failed to process credential data", http.StatusBadRequest)
-		return
-	}
-	credentialRequest.Header.Set("Content-Type", "application/json")
-
-	webAuthn, err := s.getWebAuthnForRequest(r)
-	if err != nil {
-		log.Printf("Failed to get WebAuthn instance: %v", err)
-		http.Error(w, "WebAuthn configuration error", http.StatusInternalServerError)
-		return
-	}
-
-	_, err = webAuthn.FinishLogin(user, *sessionData, credentialRequest)
-	if err != nil {
-		log.Printf("Failed to finish token refresh: %v", err)
-		http.Error(w, fmt.Sprintf("Failed to finish token refresh: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	s.mu.Lock()
-	delete(s.refreshSessions, username)
-	s.mu.Unlock()
-
-	accessToken, err := s.generateJWT(username)
-	if err != nil {
-		log.Printf("Failed to generate JWT: %v", err)
+		log.Printf("Failed to generate new access token: %v", err)
 		http.Error(w, "Failed to generate access token", http.StatusInternalServerError)
 		return
 	}
 
+	log.Printf("Successfully refreshed access token for user: %s", refreshToken.Username)
+
 	response := TokenResponse{
-		AccessToken: accessToken,
+		AccessToken: newAccessToken,
 		ExpiresIn:   30,
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -643,6 +645,26 @@ func (s *Server) ProtectedHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+func (s *Server) LogoutHandler(w http.ResponseWriter, r *http.Request) {
+	refreshCookie, err := r.Cookie("refresh_token")
+	if err == nil {
+		s.revokeRefreshToken(refreshCookie.Value)
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    "",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+		Path:     "/",
+		MaxAge:   -1,
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": "Logged out successfully"})
 }
 
 func generateChallenge() (string, error) {
@@ -683,16 +705,26 @@ func main() {
 	r.HandleFunc("/register/finish", server.RegisterFinishHandler).Methods("POST")
 	r.HandleFunc("/login/start", server.LoginStartHandler).Methods("POST")
 	r.HandleFunc("/login/finish", server.LoginFinishHandler).Methods("POST")
-	r.HandleFunc("/refresh/start", server.RefreshStartHandler).Methods("POST")
-	r.HandleFunc("/refresh/finish", server.RefreshFinishHandler).Methods("POST")
+	r.HandleFunc("/refresh", server.RefreshHandler).Methods("POST")
+	r.HandleFunc("/logout", server.LogoutHandler).Methods("POST")
 	r.HandleFunc("/protected", server.jwtMiddleware(server.ProtectedHandler)).Methods("GET")
 
 	r.PathPrefix("/").Handler(http.FileServer(http.Dir("./public/")))
 
+	corsOrigins := []string{"*"}
+	if os.Getenv("RAILWAY_ENVIRONMENT") != "" {
+		if railwayDomain := os.Getenv("RAILWAY_PUBLIC_DOMAIN"); railwayDomain != "" {
+			corsOrigins = []string{"https://" + railwayDomain}
+		}
+	} else {
+		corsOrigins = []string{"http://localhost:3000", "https://localhost:3000", "http://127.0.0.1:3000", "https://127.0.0.1:3000"}
+	}
+
 	c := cors.New(cors.Options{
-		AllowedOrigins: []string{"*"},
-		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders: []string{"*"},
+		AllowedOrigins:   corsOrigins,
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"*"},
+		AllowCredentials: true,
 	})
 
 	handler := c.Handler(r)
