@@ -218,6 +218,10 @@ func (s *Server) RegisterStartHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.mu.Lock()
+	delete(s.users, username)
+	s.mu.Unlock()
+
 	user := &User{
 		ID:          []byte(username),
 		Name:        username,
@@ -239,10 +243,9 @@ func (s *Server) RegisterStartHandler(w http.ResponseWriter, r *http.Request) {
 
 		requireResidentKey := false
 		credCreationOpts.AuthenticatorSelection = protocol.AuthenticatorSelection{
-			AuthenticatorAttachment: protocol.Platform,
-			UserVerification:        protocol.VerificationRequired,
-			ResidentKey:             protocol.ResidentKeyRequirementPreferred,
-			RequireResidentKey:      &requireResidentKey,
+			UserVerification:   protocol.VerificationDiscouraged,
+			ResidentKey:        protocol.ResidentKeyRequirementDiscouraged,
+			RequireResidentKey: &requireResidentKey,
 		}
 	}
 
@@ -385,7 +388,7 @@ func (s *Server) LoginStartHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	loginOptions := func(credRequestOpts *protocol.PublicKeyCredentialRequestOptions) {
-		credRequestOpts.UserVerification = protocol.VerificationPreferred
+		credRequestOpts.UserVerification = protocol.VerificationDiscouraged
 	}
 
 	options, sessionData, err := webAuthn.BeginLogin(user, loginOptions)
@@ -524,11 +527,11 @@ func (s *Server) RefreshStartHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	loginOptions := func(credRequestOpts *protocol.PublicKeyCredentialRequestOptions) {
-		credRequestOpts.UserVerification = protocol.VerificationPreferred
+	refreshOptions := func(credRequestOpts *protocol.PublicKeyCredentialRequestOptions) {
+		credRequestOpts.UserVerification = protocol.VerificationDiscouraged
 	}
 
-	options, sessionData, err := webAuthn.BeginLogin(user, loginOptions)
+	options, sessionData, err := webAuthn.BeginLogin(user, refreshOptions)
 	if err != nil {
 		log.Printf("Failed to begin token refresh: %v", err)
 		http.Error(w, "Failed to begin token refresh", http.StatusInternalServerError)
